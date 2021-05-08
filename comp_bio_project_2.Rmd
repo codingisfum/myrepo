@@ -1,0 +1,371 @@
+---
+title: "Health, Language, and Income in Chicago, Illinois"
+output:
+  html_document: github_document
+  pdf_document: default
+  always_allow_html: yes
+---
+
+Nathan Eckert
+
+## Introduction
+The data included in this exploratory analysis are from the official City of Chicago website. The first data set called Languages Spoken in Chicago was collected from 2008 to 2012. It includes data about the predominant non-English language spoken in each Chicago community. It also includes the percent of residents over five, who speak English "less than very well" in addition to the counts of the spoken languages. The data was compiled from U.S. Census Bureau's 2008-2012 American Community Survey 5-year estimates. The second data set is named Public Heath Statistics from 2005 to 2011 and includes various health indicators organized by community area of Chicago. It was collected from multiple sources including census data, Chicago Dept. of Public Health, and reports accessible through local infectious disease laws. The data were tidied and combined into one data set.
+
+I was interested in this data set because it contains a sizable amount of data across multiple health variables for a specific area. The addition of a language aspect may reveal ethnic or racial health differences among communities. The restriction to only Chicago communities may serve as a control for my findings. I will describe my variables when they are used. Specific information about variables can be found at the provided sources.
+ 
+
+*Source URLs*
+https://data.cityofchicago.org/Health-Human-Services/Census-Data-Languages-spoken-in-Chicago-2008-2012/a2fk-ec6q
+https://data.cityofchicago.org/Health-Human-Services/Public-Health-Statistics-Selected-public-health-in/iqnk-2tcu
+
+
+```{r}
+#Opened data sets and renamed to simpler names.
+
+library(readxl)
+Chicago_Health_short_ <- read_excel("Chicago Health (short).xlsx")
+Chicago_Languages_short_ <- read_excel("Chicago Languages (short).xlsx")
+
+chic_lang <- Chicago_Languages_short_
+chic_health <- Chicago_Health_short_
+```
+
+## Tidy
+```{r}
+library(tidyverse)
+library(dplyr)
+
+head(chic_lang)
+#separate Non-English Lang (%) into two separate columns for predominant non-English language spoken and percent that speak English less than very well.
+chic_lang <- chic_lang%>%
+  separate("NON-ENG LANG (%)", into = c("NON-ENGLISH LANG", "Percent under well"))
+head(chic_lang)
+
+#This code turns all spaces into periods and all commas into spaces.
+
+names(chic_health)<-str_replace_all(names(chic_health), c(" " = "." , "," = "" ))
+names(chic_lang)<-str_replace_all(names(chic_lang), c(" " = "." , "," = "" ))
+
+#This changes any missing values like "." into NAs.
+chic_health <- na_if(chic_health, ".")
+chic_lang <- na_if(chic_lang, ".")
+
+```
+The data sets are now tidy and ready to be joined.
+
+## Join/ Merge
+```{r}
+chic_lang
+#I will join the two data sets chic_lang and chic_health by community name and remove a redundant column "community.y".
+chicago <- left_join(chic_health, chic_lang, by = "Community.Name")%>%
+  select(!"Community.y")
+
+#Fixed percent and gonorrhea.m being chr, now is numeric.
+chicago <- chicago%>%
+  mutate_at(vars(`Percent.under.well`),as.numeric)%>%
+  mutate_at(vars(`Gonorrhea.M`),as.numeric)
+chicago
+```
+A redundant column and data for the city as a whole were removed. The output is the joined data set called "chicago".
+
+## Exploratory Data Analysis (EDA)
+```{r}
+library(ggplot2)
+#made a new dataset with some categorical variables of interest
+chicagoplus<- chicago%>%
+mutate(proficiency = case_when(Percent.under.well>5.7 ~ "above",
+                                Percent.under.well<=5.7 ~ "below"),
+       income = case_when(Per.Capita.Income>27915 ~ "upper",
+                          Per.Capita.Income<=27915 ~ "lower"),
+       cancer.death = case_when(`Cancer.(All.Sites)`>178.4 ~ "high",
+                                `Cancer.(All.Sites)`<= 178.4 ~ "low"),
+       gon.rate = case_when(Gonorrhea.F>285 ~ "above",
+                            Gonorrhea.F<=285 ~ "below"))
+```
+
+The variable 'proficiency' divided communities into "above" and "below" the percent of people who speak English less than very well in relation to the percent for the US as a whole, which was 5.7 (as determined by the US census). The variable 'income' is the per capita income per community separated into "above" and "below" the US baseline. Note that baselines come from the data sources and are determined by the US government's Healthy People objective. Cancer.death and gon.rate break communities up by above and below US baselines for total cancer deaths (per 100,000 people) and gonorrhea cases in females (per 100,000), respectively.
+
+```{r}
+#graph of cancer deaths by language proficiency
+chicagoplus%>%
+  filter(!is.na(proficiency))%>%
+  ggplot(aes(x=proficiency, y=`Cancer.(All.Sites)`, ))+geom_boxplot()+
+  ggtitle("Community cancer deaths by proficiency in English")+
+  xlab("Relation to US percent who speak English < very well")+
+  ylab("Deaths from cancer (per 100,000)")
+```
+
+It appears that there is a difference in dying of cancer in communities where more people speak poor English than in in communities where English is spoken well. This will be further investigated with a logistic regression model.
+
+```{r}
+# relationship of predominate non-English language across variables
+chicagoplus %>%
+  group_by(`NON-ENGLISH.LANG`) %>%
+  summarize(mean(Per.Capita.Income), mean(Stroke), mean(Low.Birth.Weight), mean(Infant.Mort.Rate), mean(Teen.Birth.Rate), mean(Prenatal.Care.First.Trim))
+
+# counts of each predominate non-English language communities
+chicagoplus%>%
+  group_by(`NON-ENGLISH.LANG`)%>%
+  count()
+```
+I checked the means of different variables across predominate non-English language. Chinese speaking communities seem to make the most per capita income. African language speaking communities seemed to have comparatively very high rates of stroke-related deaths , highest rates of low birth rate, infant mortality, and teen birthrate. Rates of prenatal care was the highest among Polish-speaking communities though, there was little variation in this category.
+These statistics are all qualified by extremely low sample sizes except for Spanish which takes up the majority of observations. Significant differences will be determined with MANOVA and subsequent tests.
+
+```{r}
+# relationship between high school diplomas, per capita income, and gonorrhea rates
+chicagoplus%>%
+  select(Gonorrhea.F, Per.Capita.Income, No.HS.Diploma)%>%
+  ggplot(aes(x=No.HS.Diploma, y=Gonorrhea.F, color=Per.Capita.Income)) + geom_point()+
+  #set middle color at US baseline per capita income
+  scale_color_gradient2(low="red",mid = "yellow",high="dark green", midpoint = 27915)+
+  ggtitle("Female gonorrhea rates by per capita income and high school diploma rates") +
+  xlab("Percent no high school diploma (over 25 y/o)")+
+  ylab("Gonorrhea cases in females (per 100,000)")+
+  theme_light()
+```
+
+This graph suggests that communities with a greater per capita income have fewer gonorrhea cases (in females). It also appears that those communities that make the US baseline per capita income (yellow) have about 20 percent of residents over 25 who do not have a high school diploma. There appears to be a normal distribution between having a high school diploma and gonorrhea. I would like to further investigate the relationship between shown variables in a linear regression model.
+
+```{r}
+# Distribution of per capita income
+hist(chicagoplus$Per.Capita.Income)
+```
+
+The per capita income of Chicago communities appears to not be normal and have a right skew. As this is a variable I will use frequently, the lack of normality should be considered when evaluating accuracy of models and assumptions.
+
+## MANOVA 
+```{r}
+# Does per capita income or stroke death rate differ by predominate non-English language
+# Perform MANOVA with 2 response variables listed in cbind()
+manova_chic <- manova(cbind(Per.Capita.Income, Stroke) ~ `NON-ENGLISH.LANG`, data = chicagoplus)
+# Output of MANOVA
+summary(manova_chic)
+
+
+```
+Whether or not stroke deaths or per capita income vary between groups of predominate non-English language was investigated as it may reveal ethnic differences in cardiovascular health or financial status. 
+It appears that the groups of predominate non-English languages do differ by at least one selected variable.
+```{r}
+#ANOVA for each varible
+summary.aov(manova_chic)
+```
+It appears that both rates of stroke-related deaths and per capita income were significantly different between predominate non-English languages.  
+
+```{r}
+# post-hoc testing for per capita income
+pairwise.t.test(chicagoplus$Per.Capita.Income,chicagoplus$`NON-ENGLISH.LANG`, p.adj="none")
+
+# post-hoc testing for stroke rates
+pairwise.t.test(chicagoplus$Stroke,chicagoplus$`NON-ENGLISH.LANG`, p.adj="none")
+
+# Bonferroni alpha
+# 1 MANOVA + 2 ANOVA + 12 t-tests...15 total tests
+0.05/15
+```
+A total of 15 tests were performed. For this reason the new probability of a type I error was multiplied by 15 (from 0.05 to 0.75). To account for this, the Bonferroni adjusted alpha of 0.0033 was used. After using the adjusted alpha, none of the groups appeared significantly different despite the significant MANOVA and ANOVA tests. This unexpected result may be due to the extremely small sample sizes.
+
+On that note, it is important to note that many of the MANOVA assumptions have likely not been met. The sample sizes for the groups of non-English languages are as low as 2. Judging from the lack of normality of per capita income, I expect much of the data to be non-normal. Since the data was not transformed I expect there could be unequal variance among other failed assumptions. A PERMANOVA test may be more appropriate for this reason. 
+
+
+
+## Randomization Test
+```{r}
+# Does percent preterm births change with income?
+chic.rando<- chicagoplus%>%
+  select(Preterm.Births, income)
+# Calculate the mean difference between the two conditions
+true_diff <- chic.rando %>%
+  group_by(income) %>%
+  summarize(means = mean(Preterm.Births)) %>%
+  summarize(mean_diff = diff(means)) %>%
+  pull
+true_diff
+# true diff is -1.99
+
+# loop of sampled data
+mean_diff <- vector()
+for(i in 1:5000){ 
+  temp <- data.frame(income = chic.rando$income, Preterm.Births = sample(chic.rando$Preterm.Births)) 
+  
+  mean_diff[i] <- temp %>% 
+    group_by(income) %>%
+    summarize(means = mean(Preterm.Births)) %>%
+    summarize(mean_diff = diff(means)) %>%
+    pull
+}
+
+# Represent the distribution of the mean differences with a vertical line showing the true difference
+{hist(mean_diff, main="Distribution of the mean differences"); abline(v = -1.988095, col="red")}
+
+# Calculate the corresponding two-sided p-value
+mean(mean_diff > -true_diff | mean_diff < true_diff)
+```
+I selected preterm birth percent to compare because preterm births are caused by things such as maternal disease, unhealthy habits (like smoking), and stress. These are predicted to be related to lower income, thus the means may differ.
+
+Ho: The group means of percent pre-term births between higher income and lower income are not significantly different.
+HA: The group means of percent pre-term births between higher income and lower income are significantly different.
+
+After performing a randomization test, I reject the null hypothesis and conclude that the group means of percent pre-term births between higher income and lower income are significantly different. My evidence is a p value of 0.008 which is less than my alpha of 0.05. 
+
+## Linear Regression
+```{r}
+# centering numeric variables of interaction
+chicagoplus$No.HS.Diploma_c <- chicagoplus$No.HS.Diploma - mean(chicagoplus$No.HS.Diploma)
+
+# linear regression of centered variables with interactions
+# note: centering may change coefficients, but not interactions
+fit.gon_c <- lm(Gonorrhea.F ~ income * No.HS.Diploma_c, data = chicagoplus)
+summary(fit.gon_c)
+
+#graph of interaction
+ggplot(chicagoplus, aes(x = No.HS.Diploma_c, y = Gonorrhea.F, color = income)) +
+  geom_point() +
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE)+
+  scale_color_brewer(palette="Set2")+
+  ggtitle("Gonorrhea rates and centered no high school degree by income")+
+  ylab("Female gonorrhea cases (per 100,000)")+
+  xlab("Centered percent no high school degree (over 25 y/o)")+
+  labs(color = "Income in upper or lower\n half of US baseline")
+
+```
+
+If income is in the upper half above the US baseline, then predicted female gonorrhea rates decrease by 750 cases per 100,000 from the lower income half, controlling for the centered percent with no high school diploma. As the percent of no high school degrees in a community increases above the sample mean by one percent, the female gonorrhea rate is predicted to decrease by 30 cases. Additionally, if the community is in the upper income half, the model predicts gonorrhea cases increase by an extra 47 cases for every one percent increase above the mean percent of no high school diplomas.
+
+The model shows that only centered percent of no high school diploma is a significant predictor of female gonorrhea rates. 
+
+The amount of variation explained by the model is revealed by the coefficient of determination or r-squared. Because multiple predictors were used, the adjusted r-squared is preferred. The adjusted r-squared for the model is 0.22 meaning only 22% of the variation can be explained in the model. 
+
+*Assumptions*
+```{r}
+# Normality
+# Q-Q plot to check for normality of the residuals
+plot(fit.gon_c, which = 2)
+
+# Residuals against fitted values plot to check for any problematic patterns (nonlinear, equal variance)
+plot(fit.gon_c, which = 1)
+```
+
+According to the qq plot the residuals appear normal and meet the normality assumption. The data meets the linearity and independence assumptions as there is no non-linear pattern in the residuals-fitted plot. The residuals-fitted plot suggests however that the data fails the equal variance assumption as there is visible funneling. 
+
+*Robust Standard Errors*
+```{r}
+# install.packages (sandwich wouldn't open coeftest, but lmtest did)
+library(sandwich)
+library(lmtest)
+coeftest(fit.gon_c, vcov = vcovHC(fit.gon_c))
+```
+After correcting for failed assumptions, the model now suggests that both the effect from upper income and the interaction from the two predictors is significant, in addition to the effect of centered percent no high school diploma. Considering my earlier model failed some assumptions, it is likely that this is a more appropriate way to view the model.
+
+*Bootstrapped SE and confidence interval*
+```{r}
+# resampling loop
+samp_SEs <- replicate(5000, {
+  # Bootstrap your data (resample observations)
+  boot_data <- sample_frac(chicagoplus, replace = TRUE)
+  # Fit regression model
+  fitboot <- lm(Gonorrhea.F ~ income * No.HS.Diploma_c, data = boot_data)
+  # Save the coefficients
+  coef(fitboot)
+})
+
+# Estimated SEs
+samp_SEs %>%
+  # Transpose the obtained matrices
+  t %>%
+  # Consider the matrix as a data frame
+  as.data.frame %>%
+  # Compute the standard error (standard deviation of the sampling distribution)
+  summarize_all(sd)
+```
+At the change from original to robust standard error (SE) the SEs seemed to decrease by a considerable amount. This was unexpected as I figured the error would increase for failed assumptions. A reason for this might be the fact that the original model suffered from failed assumptions that were accounted for in the robust SEs. Another unknown reason may also be the cause. As expected from decreased standard error, the p values decreased from original to robust. The change even caused two more predictors to appear significant.
+From robust SE to bootstrapped SE, the standard errors increased in all areas, though slightly. This makes sense as the bootstrapped SE assumes the fewest assumptions met, so it presumes the greatest amount of error.
+
+## Logistic Regression
+```{r}
+# Logistic regression predicting high or low cancer rate than average based on % English and per capita income
+chic.glm <- chicagoplus%>%
+  
+  #make cancer.death a binary response
+  mutate(y = ifelse(cancer.death == "high", 1, 0))%>%
+  filter(!is.na(Percent.under.well))
+
+# chic.glm will the the dataset I use
+chic.glm
+
+#new dataset has relevant variables and binary variable
+head(chic.glm)
+```
+
+```{r}
+#Logistic model
+fit1 <- glm(y ~ Per.Capita.Income * proficiency, data = chic.glm, family = "binomial")
+summary(fit1)
+#more interpretable odds
+exp(coef(fit1))
+```
+By controlling for income, I attempted to determine if a lack of proficiency in English led to people being more hesitant to visit a health care provider without the effects of high health care costs. This hesitancy may arise from a language barrier between communities and health care providers. 
+
+The results of the logistic model suggest that proficiency in English does significantly predict if a community will have cancer deaths higher or lower than the US baseline. The interpretation is those communities who have English proficiency of "below" the US baseline have odds of living in a community with cancer deaths higher than the US baseline 174 times the odds of those who have proficiency of "above", when controlling for per capita income. 
+
+The insignificant effect of per capita income was having the odds of living in a community with cancer deaths higher than the US baseline be multiplied by 0.99 for each one dollar increase in per capita income, controlling for English proficiency. The interactions were insignificant as well.
+
+#### Confusion Matrix
+
+```{r}
+
+# create probabilities variable
+chic.glm$prob1 <-  predict(fit1, type = "response")
+
+# call probabilities of greater than 0.5 true... i.e. "high" cancer, otherwise "low"
+chic.glm$predicted <- ifelse(chic.glm$prob1 > .5, "high", "low")
+
+# Confusion matrix: compare true to predicted condition in table
+table(true_condition = chic.glm$cancer.death, predicted_condition = chic.glm$predicted) %>% 
+  addmargins
+
+# Accuracy (correct/total)
+(26+29)/75
+
+# Sensitivity (proportion true positives identified)
+26/42
+
+# Specificity (proportion true negatives identified)
+29/33
+
+# Precision (proportion of true positive predictions)
+26/30
+```
+According to the confusion matrix, my models accuracy was 0.73, the sensitivity 0.62, the specificity 0.89, and the precision 0.86. The worst predictor was for identifying communities higher-than-US-baseline cancer deaths (sensitivity). It was better at correctly identifying communities with lower-than-US-baseline cancer deaths (specificity). Overall the accuracy and precision of the model are good.
+
+```{r}
+# Predicting log-odds from model
+chic.glm$logit <- predict(fit1, type = "link") 
+chic.glm
+# use predicted log-odds to build density plot
+chic.glm %>%
+  ggplot() + 
+  geom_density(aes(logit, color = cancer.death, fill = cancer.death), alpha = .4) +
+    geom_rug(aes(logit, color = cancer.death)) +
+  geom_text(x = -5, y = .07, label = "TN = 431") +
+  geom_text(x = -1.75, y = .008, label = "FN = 19") +
+  geom_text(x = 1, y = .006, label = "FP = 13") +
+  geom_text(x = 5, y = .04, label = "TP = 220") +
+  theme(legend.position = c(.85,.85)) +
+  geom_vline(xintercept = 0) + 
+  xlab("logit (log-odds)")+
+  ggtitle("Density plot of log-odds by higher or lower than US baseline cancer deaths")
+
+```
+```{r}
+# ROC and AUC of model
+library(plotROC) 
+# Plot ROC depending on values of y and its probabilities displaying some cutoff values
+cancer.ROC <- ggplot(chic.glm) + 
+  geom_roc(aes(d = y, m = prob1))
+cancer.ROC
+
+# AUC
+calc_auc(cancer.ROC)
+```
+
+The area under the curve (AUC) of my ROC plot is about 83% of the total area.  The interpretation of the AUC is a randomly selected community from the "high" cancer death category would have a test value greater than a randomly selected community from the "low" cancer death category 83 percent of the time. This AUC suggests the model is "good" at predicting if a community would have higher or lower cancer deaths than the US baseline.
